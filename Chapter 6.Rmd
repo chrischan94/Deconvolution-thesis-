@@ -1,0 +1,222 @@
+---
+title: "likelihood FW"
+author: "Christian Chan"
+date: "August 19, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+gen.data.prior <- function(n, p, alpha_T=1.5, beta_T =1, alpha_O=1, beta_O=1, mu_0=2, sigma_0=1, mu_1=3, sigma_1=1, r1 = c(0,0.1,0.2,0.3,0.4), r2 = c(1,0.9,0.8,0.7,0.6), g, iter = 50, seed){
+  set.seed(seed)
+  pre_T <- rgamma(p, alpha_T, beta_T) #precision of T
+  pre_O <- rgamma(p, alpha_O, beta_O) #precision of O
+  mu_T <- rnorm(p, mu_0, sigma_0)
+  mu_O <- rnorm(p, mu_1, sigma_1)
+  f1 <- runif(n, r1[1], r2[1])
+  f2 <- runif(n, r1[2], r2[2])
+  f3 <- runif(n, r1[3], r2[3])
+  f4 <- runif(n, r1[4], r2[4])
+  f5 <- runif(n, r1[5], r2[5])
+  priors <- unname(cbind(mu_T, mu_O, pre_T, pre_O))
+  T.rep <- replicate(iter, rlnorm(n, meanlog = priors[g,1], sdlog = sqrt(1/priors[g,3])))
+  O.rep <- replicate(iter, rlnorm(n, meanlog = priors[g,2], sdlog = sqrt(1/priors[g,4])))
+  Y.rep1 <- f1*T.rep + (1-f1)*O.rep
+  Y.rep2 <- f2*T.rep + (1-f2)*O.rep
+  Y.rep3 <- f3*T.rep + (1-f3)*O.rep
+  Y.rep4 <- f4*T.rep + (1-f4)*O.rep
+  Y.rep5 <- f5*T.rep + (1-f5)*O.rep
+  return(list(Y.rep1, Y.rep2, Y.rep3, Y.rep4, Y.rep5, f1,f2,f3,f4,f5, priors))
+}
+
+#data.lik <- gen.data.prior(n = 500, p = 1000, g = 11, iter = 50, seed = 1234)
+#Y.rep <- data.lik[[3]]
+#f <- data.lik[[8]]
+g4 <- gen.data.prior(n = 500, p = 1000, g = 4, iter = 50, seed = 1234)
+Y.rep <- g4[[3]]
+f <- g4[[8]]
+```
+
+
+```{r}
+Y <- Y.rep[,22]
+
+
+exact_dens <- function(i,mu_T, mu_O, s_T, s_O){
+  yi <- Y[i]
+  lfi <- log(f[i])
+  lfio <- log(1-f[i])
+  g <- function(t) dlnorm(t,lfi + mu_T, s_T)*dlnorm(yi-t, lfio + mu_O, s_O)
+  return(integrate(g, 0, yi, rel.tol = 0.05)$value) 
+}
+
+FW_dens <- function(i, mu_T, mu_O, s_T, s_O){
+     Yi <- Y[i]
+     lfi <- log(f[i])
+     lfio <- log(1-f[i])
+     mu_Tstar <- lfi + mu_T
+     mu_Ostar <- lfio + mu_O
+     sigma2_Y <- log((exp(2*mu_Tstar + s_T^2)*(exp(s_T^2)-1) + exp(2*mu_Ostar +          s_O^2)*(exp(s_O^2)-1))/((exp(mu_Tstar + s_T^2/2) + exp(mu_Ostar + s_O^2/2))^2) + 1)
+    mu_Y <- log(exp(mu_Tstar + s_T^2/2) + exp(mu_Ostar + s_O^2/2)) - sigma2_Y/2
+    return(dlnorm(Yi, mu_Y, sqrt(sigma2_Y)))
+}
+
+loglike.FW <- function(pars){
+  mu_T <- pars[1]
+  mu_O <- pars[2]
+  s_T <- pars[3]
+  s_O <- pars[4]
+  return(-sum(log(sapply(1:length(f), FW_dens, mu_T = mu_T, mu_O = mu_O, s_T = s_T, s_O = s_O))))
+}
+
+loglike.exact <- function(pars){
+  mu_T <- pars[1]
+  mu_O <- pars[2]
+  s_T <- pars[3]
+  s_O <- pars[4]
+  return(-sum(log(sapply(1:length(f), exact_dens, mu_T = mu_T, mu_O = mu_O, s_T = s_T, s_O = s_O))))
+}
+
+optim(c(2,2,2,2), fn = loglike.exact, method  = "Nelder-Mead")
+optim(c(2,2,2,2), fn = loglike.FW, method = "Nelder-Mead")
+pen.loglike.FW <- function(pars){
+  mu_T <- pars[1]
+  mu_O <- pars[2]
+  s_T <- pars[3]
+  s_O <- pars[4]
+  penalty <- log(dnorm(mu_T, 2, 1)) + log(dnorm(mu_O, 3, 1)) + log(dgamma((1/s_T)^2, 1.5, 1)) + log(dgamma((1/s_O)^2, 1, 1))
+  lik <- sapply(1:length(f), FW_dens, mu_T = mu_T, mu_O = mu_O, s_T = s_T, s_O = s_O)
+  return((sum(log(lik))) + penalty)
+}
+
+#x.muT <- seq(0, 4, by = 0.1)
+#x.muO <- seq(0, 4, by = 0.1)
+#x.sT <- seq(0, 4, by = 0.1)
+#x.sO <- seq(0, 4, by = 0.1)
+#loglike.FW(c(3.6627577,3.8546494,1.575438,0.8346))
+#loglike.exact(c(3.6627577,3.8546494,1.575438,0.8346))
+#pen.loglike.FW(c(3.6627577,3.8546494,1.575438,0.8346))
+#plot(sapply(1:length(x.muT), function(i) loglike.FW(c(x.muT[i], 3.8546494,1.575438,0.8346))), type = "l", ylim = c(-3100, -2600), ylab = "log-likelihood")
+#lines(sapply(1:length(x.muT), function(i) pen.loglike.FW(c(x.muT[i], 3.8546494,1.575438,0.8346))), col = "blue")
+#lines(sapply(1:length(x.muT), function(i) loglike.exact(c(x.muT[i], 3.8546494,1.575438,0.8346))), col = "green")
+#plot(sapply(1:length(x.muO), function(i) loglike.FW(c(2, x.muO[i], 1, 1))), type = "l")
+#lines(sapply(1:length(x.muO), function(i) loglike.exact(c(2, x.muO[i], 1, 1))), col = "red")
+
+#plot(sapply(1:length(x.sT), function(i) loglike.FW(c(2, 0, x.sT[i], 1))), type = "l")
+#lines(sapply(1:length(x.sT), function(i) loglike.exact(c(2, 0, x.sT[i], 1))), col = "red")
+#plot(sapply(1:length(x.sO), function(i) loglike.FW(c(2, 0, 1, x.sO[i]))), type = "l")
+
+
+plot(x.muT, dlnorm(x.muT, 2, 1))
+```
+Bad y
+```{r}
+x.muT <- seq(-7, 5, by = 0.1)
+x.sT <- seq(0, 5, by = 0.1)
+x.muO <- seq(0, 5, by = 0.1)
+x.sO <- seq(0, 5, by = 0.1)
+x.sT.ex <- x.sT[-c(1,2)]
+x.sO.ex <- x.sO[-c(1,2)]
+loglike.FW.T <- function(pars){
+  mu_T <- pars[1]
+  s_T <- pars[2]
+  return(sum(log(sapply(1:length(f), FW_dens, mu_T = mu_T, mu_O = 3.8546494, s_T = s_T, s_O = 0.8346))))
+}
+
+loglike.FW.O <- function(pars){
+  mu_O <- pars[1]
+  s_O <- pars[2]
+  return(sum(log(sapply(1:length(f), FW_dens, mu_T = 3.6627577, mu_O = mu_O, s_T = 1.575438, s_O = s_O))))
+}
+
+loglike.exact.T<- function(pars){
+  mu_T <- pars[1]
+  s_T <- pars[2]
+  return(sum(log(sapply(1:length(f), exact_dens, mu_T = mu_T, mu_O = 3.8546494, s_T = s_T, s_O = 0.8346))))
+}
+
+loglike.exact.O<- function(pars){
+  mu_O <- pars[1]
+  s_O <- pars[2]
+  return(sum(log(sapply(1:length(f), exact_dens, mu_T = 3.6627577, mu_O = mu_O, s_T = 1.575438, s_O = s_O))))
+}
+u1 <- as.matrix(expand.grid(x.muT, x.sT))
+u2 <- as.matrix(expand.grid(x.muO, x.sO))
+u3 <- as.matrix(expand.grid(x.muT, x.sT.ex))
+u4 <- as.matrix(expand.grid(x.muO, x.sO.ex))
+z1 <- matrix(apply(u1, 1, function(v) loglike.FW.T(c(v[1], v[2]))),
+            nrow = length(x.muT))
+z2 <- matrix(apply(u2, 1, function(v) loglike.FW.O(c(v[1], v[2]))),
+            nrow = length(x.muO))
+z3 <- matrix(apply(u3, 1, function(v) loglike.exact.T(c(v[1], v[2]))),
+            nrow = length(x.muT))
+z4 <- matrix(apply(u4, 1, function(v) loglike.exact.O(c(v[1], v[2]))),
+            nrow = length(x.muO))
+par(mfrow = c(1,2))
+z3 <- z3[,-c(1,2)]
+x.sT.ex <- x.sT[-c(1,2)]
+filled.contour(x.muT, x.sT, z1, color.palette=terrain.colors, 
+               xlab="mu of T", ylab="sigma of T",
+               main="Fenton-Wilkinson Log-likelihood")
+filled.contour(x.muO, x.sO, z1, color.palette=terrain.colors, 
+               xlab="mu of O", ylab="sigma of O",
+               main="Fenton-Wilkinson Log-likelihood")
+filled.contour(x.muT, x.sT.ex, z3, color.palette=terrain.colors, 
+               xlab="mu of T", ylab="sigma of T",
+               main="Exact density Log-likelihood")
+filled.contour(x.muO, x.sO.ex, z4, color.palette=terrain.colors, 
+               xlab="mu of O", ylab="sigma of O",
+               main="Exact density Log-likelihood")
+pen.loglike.FW.T <- function(pars){
+  mu_T <- pars[1]
+  s_T <- pars[2]
+  penalty <- log(dnorm(mu_T, 2, 1)) + log(dnorm(3.8546494, 3, 1)) + log(dgamma((1/s_T)^2, 1.5, 1)) + log(dgamma((1/0.8346)^2, 1, 1))
+  lik <- sapply(1:length(f), FW_dens, mu_T = mu_T, mu_O = 3.8546494, s_T = s_T, s_O = 0.8346)
+  return((sum(log(lik))) + penalty)
+}
+
+pen.loglike.FW.O <- function(pars){
+  mu_O <- pars[1]
+  s_O <- pars[2]
+  penalty <- log(dnorm(3.662757, 2, 1)) + log(dnorm(mu_O, 3, 1)) + log(dgamma((1/1.575438)^2, 1.5, 1)) + log(dgamma((1/s_O)^2, 1, 1))
+  lik <- sapply(1:length(f), FW_dens, mu_T = 3.662757, mu_O = mu_O, s_T = 1.575438, s_O = s_O)
+  return((sum(log(lik))) + penalty)
+}
+
+z1 <- matrix(apply(u, 1, function(v) loglike.FW.T(c(v[1], v[2]))),
+            nrow = length(x.muT))
+```
+
+Regularization
+```{r}
+Y.rep <- g4[[1]]
+f <- g4[[6]]
+Y <- Y.rep[,11]
+
+u5 <- as.matrix(expand.grid(x.muT, x.sT))
+u6 <- as.matrix(expand.grid(x.muO, x.sO))
+
+z5 <-  matrix(apply(u5, 1, function(v) loglike.FW.T(c(v[1], v[2]))),
+            nrow = length(x.muT))
+z6 <-  matrix(apply(u6, 1, function(v) loglike.FW.O(c(v[1], v[2]))),
+            nrow = length(x.muO))
+z7 <-  matrix(apply(u5, 1, function(v) pen.loglike.FW.T(c(v[1], v[2]))),
+            nrow = length(x.muT))
+z8 <-  matrix(apply(u6, 1, function(v) pen.loglike.FW.O(c(v[1], v[2]))),
+            nrow = length(x.muO))
+filled.contour(x.muT, x.sT, z5, color.palette=terrain.colors, 
+               xlab="mu of T", ylab="sigma of T",
+               main="Fenton-Wilkinson Log-likelihood")
+filled.contour(x.muO, x.sO, z6, color.palette=terrain.colors, 
+               xlab="mu of O", ylab="sigma of O",
+               main="Fenton-Wilkinson Log-likelihood")
+filled.contour(x.muT, x.sT, z7, color.palette=terrain.colors, 
+               xlab="mu of T", ylab="sigma of T",
+               main="Fenton-Wilkinson Penalised Log-likelihood")
+filled.contour(x.muO, x.sO, z8, color.palette=terrain.colors, 
+               xlab="mu of O", ylab="sigma of O",
+               main="Fenton-Wilkinson Penalised Log-likelihood")
+```
